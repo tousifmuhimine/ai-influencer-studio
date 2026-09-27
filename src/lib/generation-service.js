@@ -5,7 +5,7 @@ import { PROVIDERS } from "./providers";
 import { getCredential, hydratedCatalog, loadDb, providerStatuses, saveDb, withIdentityPack } from "./store";
 import { supabaseRest } from "./supabase";
 
-export async function enqueueJob({ type, modelId, provider, input }) {
+export async function enqueueJob({ type, modelId, provider, input, ownerEmail }) {
   const db = await loadDb();
   const statuses = await providerStatuses(db);
   const model = hydratedCatalog(db, statuses).find((item) => item.id === modelId);
@@ -17,6 +17,7 @@ export async function enqueueJob({ type, modelId, provider, input }) {
     type,
     status: "queued",
     input: withIdentityPack(db, input),
+    ownerEmail,
     output: null,
     error: null,
     createdAt: new Date().toISOString(),
@@ -25,18 +26,18 @@ export async function enqueueJob({ type, modelId, provider, input }) {
   };
   db.jobs.unshift(job);
   await saveDb(db);
-  setTimeout(() => processJob(job.id), 20);
+  setTimeout(() => processJob(job.id, ownerEmail), 20);
   return job;
 }
 
-export async function enqueueComparison({ type, modelIds = [], input }) {
+export async function enqueueComparison({ type, modelIds = [], input, ownerEmail }) {
   const jobs = [];
-  for (const modelId of modelIds) jobs.push(await enqueueJob({ type, modelId, input }));
+  for (const modelId of modelIds) jobs.push(await enqueueJob({ type, modelId, input, ownerEmail }));
   return jobs;
 }
 
-async function processJob(jobId) {
-  const db = await loadDb();
+async function processJob(jobId, ownerEmail) {
+  const db = await loadDb(ownerEmail);
   const job = db.jobs.find((item) => item.id === jobId);
   if (!job) return;
   const statuses = await providerStatuses(db);

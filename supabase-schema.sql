@@ -6,6 +6,12 @@ create table if not exists public.studio_characters (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.studio_workspaces (
+  user_email text primary key,
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.studio_generations (
   id text primary key,
   job_id text,
@@ -25,6 +31,14 @@ create table if not exists public.studio_generations (
 
 alter table public.studio_characters enable row level security;
 alter table public.studio_generations enable row level security;
+alter table public.studio_workspaces enable row level security;
+
+drop policy if exists "service role manages studio workspaces" on public.studio_workspaces;
+create policy "service role manages studio workspaces"
+on public.studio_workspaces
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
 
 drop policy if exists "service role manages studio characters" on public.studio_characters;
 create policy "service role manages studio characters"

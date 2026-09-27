@@ -10,8 +10,9 @@ export async function GET() {
 }
 
 export async function POST(request) {
-  if (!(await getSession())) return NextResponse.json({ error: "Login required." }, { status: 401 });
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Login required." }, { status: 401 });
   const body = await request.json();
-  const job = await enqueueJob(body);
+  const job = await enqueueJob({ ...body, ownerEmail: session.email });
   return NextResponse.json({ job }, { status: 202 });
 }

@@ -51,6 +51,21 @@ export async function supabaseRest(table, { method = "GET", body, query = "", pr
   return data;
 }
 
+export async function loadWorkspace(email) {
+  const rows = await supabaseRest("studio_workspaces", {
+    query: `?user_email=eq.${encodeURIComponent(email)}&select=data&limit=1`
+  });
+  return rows?.[0]?.data || null;
+}
+
+export async function saveWorkspace(email, data) {
+  await supabaseRest("studio_workspaces", {
+    method: "POST",
+    body: { user_email: email, data, updated_at: new Date().toISOString() },
+    prefer: "resolution=merge-duplicates"
+  });
+}
+
 export async function mirrorCharacterToSupabase(character) {
   try {
     await supabaseRest("studio_characters", {

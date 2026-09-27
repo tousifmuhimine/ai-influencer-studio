@@ -5,17 +5,39 @@ import { join } from "node:path";
 import { defaultDb } from "./default-db";
 import { PROVIDERS } from "./providers";
 import { registry } from "./model-registry";
+import { getSession } from "./session";
+import { loadWorkspace, saveWorkspace } from "./supabase";
 
 const dataDir = join(process.cwd(), ".studio-data");
 const dbPath = join(dataDir, "db.json");
 
-export async function loadDb() {
+export async function loadDb(ownerEmail) {
+  const session = ownerEmail ? null : await getSession();
+  const email = ownerEmail || session?.email;
+  if (email) {
+    try {
+      const workspace = await loadWorkspace(email);
+      if (workspace) return normalizeDb({ ...defaultDb, ...workspace });
+    } catch {
+      // Fall back to local storage when Supabase persistence is unavailable.
+    }
+  }
   await mkdir(dataDir, { recursive: true });
   if (!existsSync(dbPath)) await writeFile(dbPath, JSON.stringify(defaultDb, null, 2));
   return normalizeDb({ ...defaultDb, ...JSON.parse(await readFile(dbPath, "utf8")) });
 }
 
-export async function saveDb(db) {
+export async function saveDb(db, ownerEmail) {
+  const session = ownerEmail ? null : await getSession();
+  const email = ownerEmail || session?.email;
+  if (email) {
+    try {
+      await saveWorkspace(email, db);
+      return;
+    } catch {
+      // Fall back to local storage when Supabase persistence is unavailable.
+    }
+  }
   await mkdir(dataDir, { recursive: true });
   await writeFile(dbPath, JSON.stringify(db, null, 2));
 }

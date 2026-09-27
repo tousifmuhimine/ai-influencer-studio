@@ -21,17 +21,16 @@ Import this repository into Vercel and set the project root to the repository ro
 - `SUPABASE_SERVICE_ROLE_KEY`: server-only; never expose it with a `NEXT_PUBLIC_` prefix.
 - Provider keys such as `OPENAI_API_KEY`, `STABILITY_API_KEY`, and `HF_TOKEN`.
 
-Run `npm run setup:supabase` locally once against the target Supabase project before deploying. Do not add `.env` to Git or paste its values into source files.
+Run `npm run setup:supabase` locally once against the target Supabase project before deploying. This creates the per-user workspace table used for characters, credentials, custom models, favorites, jobs, and generation history. Do not add `.env` to Git or paste its values into source files.
 
 The Settings screen shows only a masked value by default. An authenticated user can explicitly view, replace, or remove a provider key; the reveal endpoint is uncached and is not included in the normal catalog response. Keys configured in local `.env` or Vercel project settings are deployment-managed and cannot be changed by a website request; update those in the relevant environment settings and redeploy. A key entered through the website is encrypted with `APP_SECRET`, so that path requires durable database storage before production use.
 
-## Important Vercel limitation
+## Storage status
 
-The current app stores its primary database and uploaded/generated media under `.studio-data/`. Vercel serverless functions use ephemeral filesystems, so this data is not a durable production store and may disappear between deployments or function instances.
+Authenticated studio state is stored in Supabase per user email, with local `.studio-data` as a development fallback. Uploaded reference images and generated image files are still written under `.studio-data/media/`; move those files to Supabase Storage before using image history across machines or server instances.
 
-Before using this as a multi-user production app, migrate:
+For a fully durable production setup, also migrate:
 
-- app state, jobs, custom models, favorites, and encrypted credentials to Supabase tables;
 - reference images and generated media to Supabase Storage or another object store;
 - background generation work to a durable queue or a provider webhook/job system.
 
