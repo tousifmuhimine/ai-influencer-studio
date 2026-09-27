@@ -1,0 +1,6 @@
+.studio-data/
+.env
+.next/
+.vercel/
+*.log
+node_modules/
