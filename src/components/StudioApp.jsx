@@ -156,6 +156,11 @@ export default function StudioApp() {
     await load();
   }
 
+  async function removeProvider(providerId) {
+    await api(`/api/credentials/${providerId}`, { method: "DELETE" });
+    await load();
+  }
+
   async function addCustomModel(event) {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.currentTarget).entries());
@@ -224,7 +229,7 @@ export default function StudioApp() {
         {active === "video" && <GenerationPanel type="video" state={state} form={forms.video} update={updateForm} onSubmit={submitGeneration} />}
         {active === "compare" && <ComparePanel state={state} form={forms.compare} update={updateForm} onSubmit={submitComparison} />}
         {active === "catalog" && <CatalogPanel models={state.models} toggleFavorite={toggleFavorite} addCustomModel={addCustomModel} />}
-        {active === "settings" && <SettingsPanel providers={state.providers} saveProvider={saveProvider} />}
+        {active === "settings" && <SettingsPanel providers={state.providers} saveProvider={saveProvider} removeProvider={removeProvider} />}
         {active === "history" && <HistoryPanel generations={state.generations} />}
       </main>
     </div>
@@ -436,15 +441,17 @@ function CatalogPanel({ models, toggleFavorite, addCustomModel }) {
   );
 }
 
-function SettingsPanel({ providers, saveProvider }) {
-  return <section className="panel wide"><h2>Provider Credentials</h2><div className="providers">{Object.values(providers).map((provider) => (
+function SettingsPanel({ providers, saveProvider, removeProvider }) {
+  return <section className="panel wide"><h2>Provider Credentials</h2><p className="panel-note">Environment variables are managed in Vercel or your local <code>.env</code>. Keys entered here are stored encrypted by the app and can override an environment variable.</p><div className="providers">{Object.values(providers).map((provider) => (
     <form className="provider-row" key={provider.id} onSubmit={(event) => saveProvider(event, provider.id)}>
       <div><strong>{provider.name}</strong><small>{provider.env}</small></div>
       <span className={`badge ${provider.connected ? "good" : "warn"}`}>{provider.connected ? "Connected" : "Not configured"}</span>
       <span className="badge">{provider.implemented ? "Adapter ready" : "Catalog only"}</span>
+      <small>{provider.source === "environment variable" ? "Managed by environment" : provider.source === "encrypted database credential" ? "Managed in app" : "No key configured"}{provider.masked ? ` - ${provider.masked}` : ""}</small>
       <ApiKeyInput placeholder={provider.masked || "Paste API key"} />
       <label><input type="checkbox" name="enabled" defaultChecked={provider.enabled} /> Enable</label>
       <button>Save</button>
+      {provider.source === "encrypted database credential" && <button type="button" onClick={() => removeProvider(provider.id)}>Remove saved key</button>}
     </form>
   ))}</div></section>;
 }

@@ -23,6 +23,8 @@ Import this repository into Vercel and set the project root to the repository ro
 
 Run `npm run setup:supabase` locally once against the target Supabase project before deploying. Do not add `.env` to Git or paste its values into source files.
 
+The Settings screen never returns a complete saved key to the browser. It shows only a masked value and lets an authenticated user replace or remove an app-managed key. Keys configured in local `.env` or Vercel project settings are deployment-managed and cannot be changed by a website request; update those in the relevant environment settings and redeploy. A key entered through the website is encrypted with `APP_SECRET`, so that path requires durable database storage before production use.
+
 ## Important Vercel limitation
 
 The current app stores its primary database and uploaded/generated media under `.studio-data/`. Vercel serverless functions use ephemeral filesystems, so this data is not a durable production store and may disappear between deployments or function instances.
