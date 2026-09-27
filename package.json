@@ -8,6 +8,8 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 4173",
     "setup:supabase": "node scripts/setup-supabase.js",
+    "migrate:media": "node scripts/migrate-media-storage.js",
+    "migrate:workspace": "node scripts/migrate-workspace.js",
     "seed:character": "node scripts/seed-character.js"
   },
   "engines": {

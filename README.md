@@ -23,11 +23,13 @@ Import this repository into Vercel and set the project root to the repository ro
 
 Run `npm run setup:supabase` locally once against the target Supabase project before deploying. This creates the per-user workspace table used for characters, credentials, custom models, favorites, jobs, and generation history. Do not add `.env` to Git or paste its values into source files.
 
+For an existing local profile, migrate its state with `npm run migrate:workspace -- email@example.com` and its local images with `npm run migrate:media` before switching to the deployed app.
+
 The Settings screen shows only a masked value by default. An authenticated user can explicitly view, replace, or remove a provider key; the reveal endpoint is uncached and is not included in the normal catalog response. Keys configured in local `.env` or Vercel project settings are deployment-managed and cannot be changed by a website request; update those in the relevant environment settings and redeploy. A key entered through the website is encrypted with `APP_SECRET`, so that path requires durable database storage before production use.
 
 ## Storage status
 
-Authenticated studio state is stored in Supabase per user email, with local `.studio-data` as a development fallback. Uploaded reference images and generated image files are still written under `.studio-data/media/`; move those files to Supabase Storage before using image history across machines or server instances.
+Authenticated studio state is stored in Supabase per user email, with local `.studio-data` as a development fallback. Uploaded reference images and generated image files use the private `studio-media` Supabase Storage bucket when Supabase is configured.
 
 For a fully durable production setup, also migrate:
 

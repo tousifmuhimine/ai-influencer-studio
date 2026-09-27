@@ -12,6 +12,10 @@ create table if not exists public.studio_workspaces (
   updated_at timestamptz not null default now()
 );
 
+insert into storage.buckets (id, name, public)
+values ('studio-media', 'studio-media', false)
+on conflict (id) do nothing;
+
 create table if not exists public.studio_generations (
   id text primary key,
   job_id text,
