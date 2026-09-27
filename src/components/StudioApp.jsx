@@ -161,6 +161,11 @@ export default function StudioApp() {
     await load();
   }
 
+  async function viewProvider(providerId) {
+    const result = await api(`/api/credentials/${providerId}`);
+    return result.apiKey || "";
+  }
+
   async function addCustomModel(event) {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.currentTarget).entries());
@@ -229,7 +234,7 @@ export default function StudioApp() {
         {active === "video" && <GenerationPanel type="video" state={state} form={forms.video} update={updateForm} onSubmit={submitGeneration} />}
         {active === "compare" && <ComparePanel state={state} form={forms.compare} update={updateForm} onSubmit={submitComparison} />}
         {active === "catalog" && <CatalogPanel models={state.models} toggleFavorite={toggleFavorite} addCustomModel={addCustomModel} />}
-        {active === "settings" && <SettingsPanel providers={state.providers} saveProvider={saveProvider} removeProvider={removeProvider} />}
+        {active === "settings" && <SettingsPanel providers={state.providers} saveProvider={saveProvider} removeProvider={removeProvider} viewProvider={viewProvider} />}
         {active === "history" && <HistoryPanel generations={state.generations} />}
       </main>
     </div>
@@ -441,14 +446,14 @@ function CatalogPanel({ models, toggleFavorite, addCustomModel }) {
   );
 }
 
-function SettingsPanel({ providers, saveProvider, removeProvider }) {
+function SettingsPanel({ providers, saveProvider, removeProvider, viewProvider }) {
   return <section className="panel wide"><h2>Provider Credentials</h2><p className="panel-note">Environment variables are managed in Vercel or your local <code>.env</code>. Keys entered here are stored encrypted by the app and can override an environment variable.</p><div className="providers">{Object.values(providers).map((provider) => (
     <form className="provider-row" key={provider.id} onSubmit={(event) => saveProvider(event, provider.id)}>
       <div><strong>{provider.name}</strong><small>{provider.env}</small></div>
       <span className={`badge ${provider.connected ? "good" : "warn"}`}>{provider.connected ? "Connected" : "Not configured"}</span>
       <span className="badge">{provider.implemented ? "Adapter ready" : "Catalog only"}</span>
       <small>{provider.source === "environment variable" ? "Managed by environment" : provider.source === "encrypted database credential" ? "Managed in app" : "No key configured"}{provider.masked ? ` - ${provider.masked}` : ""}</small>
-      <ApiKeyInput placeholder={provider.masked || "Paste API key"} />
+      <ApiKeyInput providerId={provider.id} placeholder={provider.masked || "Paste API key"} viewProvider={viewProvider} />
       <label><input type="checkbox" name="enabled" defaultChecked={provider.enabled} /> Enable</label>
       <button>Save</button>
       {provider.source === "encrypted database credential" && <button type="button" onClick={() => removeProvider(provider.id)}>Remove saved key</button>}
@@ -456,9 +461,27 @@ function SettingsPanel({ providers, saveProvider, removeProvider }) {
   ))}</div></section>;
 }
 
-function ApiKeyInput({ placeholder }) {
+function ApiKeyInput({ providerId, placeholder, viewProvider }) {
   const [visible, setVisible] = useState(false);
-  return <div className="secret-input"><input type={visible ? "text" : "password"} name="apiKey" placeholder={placeholder} autoComplete="off" /><button type="button" className="secret-toggle" onClick={() => setVisible((current) => !current)} aria-label={visible ? "Hide API key" : "Show API key"} title={visible ? "Hide API key" : "Show API key"}>{visible ? "\u{1F441}" : "\u{25C9}"}</button></div>;
+  const [value, setValue] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function toggleVisibility() {
+    if (visible) {
+      setVisible(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const apiKey = await viewProvider(providerId);
+      setValue(apiKey);
+      setVisible(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return <div className="secret-input"><input type={visible ? "text" : "password"} name="apiKey" value={value} onChange={(event) => setValue(event.target.value)} placeholder={placeholder} autoComplete="off" /><button type="button" className="secret-toggle" onClick={toggleVisibility} disabled={loading} aria-label={visible ? "Hide API key" : "View API key"} title={visible ? "Hide API key" : "View API key"}>{loading ? "..." : visible ? "\u{1F441}" : "\u{25C9}"}</button></div>;
 }
 
 function HistoryPanel({ generations }) {
