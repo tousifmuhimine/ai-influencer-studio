@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const tabs = ["identity", "image", "video", "compare", "catalog", "settings", "history"];
 const appName = "AI Identity Studio";
@@ -19,6 +19,8 @@ async function api(path, options = {}) {
 
 export default function StudioApp() {
   const [active, setActive] = useState("identity");
+  const [navScrollable, setNavScrollable] = useState(false);
+  const navRef = useRef(null);
   const [state, setState] = useState({ providers: {}, models: [], characters: [], jobs: [], generations: [] });
   const [authUser, setAuthUser] = useState(null);
   const [authChecking, setAuthChecking] = useState(true);
@@ -40,6 +42,17 @@ export default function StudioApp() {
     setActiveCharacterId(selectedCharacter?.id || "ayra");
     setIdentityDraft(selectedCharacter?.identity || {});
   }
+
+  useEffect(() => {
+    function updateNavScrollState() {
+      const nav = navRef.current;
+      setNavScrollable(Boolean(nav && nav.scrollWidth > nav.clientWidth));
+    }
+
+    updateNavScrollState();
+    window.addEventListener("resize", updateNavScrollState);
+    return () => window.removeEventListener("resize", updateNavScrollState);
+  }, [authUser]);
 
   useEffect(() => {
     let mounted = true;
@@ -210,7 +223,10 @@ export default function StudioApp() {
           <span>Live identity system</span>
           <strong>{state.characters.length || 1} influencer profile{(state.characters.length || 1) === 1 ? "" : "s"}</strong>
         </div>
-        <nav>{tabs.map((tab) => <button key={tab} className={`nav ${active === tab ? "active" : ""}`} onClick={() => setActive(tab)}>{tab}</button>)}</nav>
+        <div className={`nav-scroll ${navScrollable ? "has-overflow" : ""}`}>
+          <nav ref={navRef} aria-label="Studio sections">{tabs.map((tab) => <button key={tab} className={`nav ${active === tab ? "active" : ""}`} onClick={() => setActive(tab)}>{tab}</button>)}</nav>
+          <span className="nav-scroll-cue" aria-hidden="true">›</span>
+        </div>
       </aside>
       <main>
         <header className="topbar">
