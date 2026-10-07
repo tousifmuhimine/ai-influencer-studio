@@ -1,14 +1,28 @@
 import { randomBytes } from "node:crypto";
 import { InferenceClient } from "@huggingface/inference";
-import { mediaAsBlob, persistOutputImages } from "./media-store";
+import { mediaAsBlob, persistMediaDataUrl, persistOutputImages } from "./media-store";
 import { PROVIDERS } from "./providers";
 import { getCredential, hydratedCatalog, loadDb, providerStatuses, saveDb, withIdentityPack } from "./store";
 import { supabaseRest } from "./supabase";
 
-export async function enqueueJob({ type, modelId, provider, input, ownerEmail }) {
+export async function enqueueJob({ type, modelId, provider, input = {}, ownerEmail }) {
   const db = await loadDb();
   const statuses = await providerStatuses(db);
   const model = hydratedCatalog(db, statuses).find((item) => item.id === modelId);
+
+  // Persist any uploaded data URLs for surrounding and dress images
+  if (input?.surroundingImage && typeof input.surroundingImage === "string" && input.surroundingImage.startsWith("data:image/")) {
+    input.surroundingImage = await persistMediaDataUrl(input.surroundingImage);
+  }
+  if (input?.dressImage && typeof input.dressImage === "string" && input.dressImage.startsWith("data:image/")) {
+    input.dressImage = await persistMediaDataUrl(input.dressImage);
+  }
+  if (input?.referenceImages && Array.isArray(input.referenceImages)) {
+    input.referenceImages = await Promise.all(
+      input.referenceImages.map((img) => (typeof img === "string" && img.startsWith("data:image/") ? persistMediaDataUrl(img) : img))
+    );
+  }
+
   const job = {
     id: `job_${randomBytes(8).toString("hex")}`,
     provider: model?.provider || provider,
@@ -89,14 +103,29 @@ async function processJob(jobId, ownerEmail) {
 }
 
 async function runOpenAiImage(job, credential, model) {
-  const size = ["1024x1024", "1024x1536", "1536x1024"].includes(job.input.resolution) ? job.input.resolution : "1024x1024";
+  const isDalle3 = model.modelId.includes("dall-e-3");
+  let size = "1024x1024";
+  if (isDalle3) {
+    if (job.input.aspectRatio === "9:16" || job.input.resolution === "1024x1792") size = "1024x1792";
+    else if (job.input.aspectRatio === "16:9" || job.input.resolution === "1792x1024") size = "1792x1024";
+    else size = "1024x1024";
+  } else {
+    size = ["1024x1024", "512x512", "256x256"].includes(job.input.resolution) ? job.input.resolution : "1024x1024";
+  }
+
   const reference = model.referenceImage ? job.input.referenceImages?.[0] : null;
   const response = reference
     ? await openAiReferenceEdit(job, credential, model, size, reference)
     : await fetch("https://api.openai.com/v1/images/generations", {
       method: "POST",
       headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: model.modelId, prompt: job.input.prompt, n: Number(job.input.count || 1), size, output_format: "png" })
+      body: JSON.stringify({
+        model: model.modelId,
+        prompt: job.input.prompt,
+        n: Number(job.input.count || 1),
+        size,
+        response_format: "b64_json"
+      })
     });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error?.message || `OpenAI request failed with ${response.status}`);
@@ -105,11 +134,11 @@ async function runOpenAiImage(job, credential, model) {
 
 async function openAiReferenceEdit(job, credential, model, size, reference) {
   const form = new FormData();
-  form.append("model", model.modelId);
+  form.append("model", model.modelId === "dall-e-3" ? "dall-e-2" : model.modelId);
   form.append("prompt", job.input.prompt);
   form.append("n", String(Number(job.input.count || 1)));
-  form.append("size", size);
-  form.append("output_format", "png");
+  form.append("size", size === "1024x1792" || size === "1792x1024" ? "1024x1024" : size);
+  form.append("response_format", "b64_json");
   form.append("image", await referenceAsBlob(reference), "face-reference.png");
   return fetch("https://api.openai.com/v1/images/edits", { method: "POST", headers: { authorization: `Bearer ${credential}` }, body: form });
 }

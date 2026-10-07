@@ -44,12 +44,27 @@ export async function saveDb(db, ownerEmail) {
 
 function normalizeDb(db) {
   const fallback = defaultDb.characters[0];
-  db.characters = (db.characters || []).map((character) => ({
-    ...fallback,
-    ...character,
-    identity: { ...fallback.identity, ...(character.identity || {}) },
-    preferences: { ...fallback.preferences, ...(character.preferences || {}) }
-  }));
+  db.characters = (db.characters || []).map((character) => {
+    const existingAngles = character.identity?.angles || {};
+    const refImgs = character.identity?.referenceImages || fallback.identity?.referenceImages || [];
+    const angles = {
+      front: existingAngles.front || refImgs[0] || "",
+      left: existingAngles.left || "",
+      right: existingAngles.right || "",
+      normal: existingAngles.normal || "",
+      ...existingAngles
+    };
+    return {
+      ...fallback,
+      ...character,
+      identity: {
+        ...fallback.identity,
+        ...(character.identity || {}),
+        angles
+      },
+      preferences: { ...fallback.preferences, ...(character.preferences || {}) }
+    };
+  });
   db.characters = db.characters.map((character) => {
     if (character.id !== "ayra" || !character.identity.faceCut.includes("Consistent oval heart face cut")) return character;
     return { ...character, identity: { ...character.identity, ...fallback.identity, referenceImages: character.identity.referenceImages || [] } };
@@ -121,23 +136,58 @@ export function hydratedCatalog(db, statuses) {
   });
 }
 
+import { CAMERA_STYLES } from "./camera-styles";
+export { CAMERA_STYLES };
+
 export function withIdentityPack(db, input = {}) {
   const identity = db.characters.find((character) => character.id === input.character)?.identity || {};
   const referenceImages = [...(identity.referenceImages || []), ...(input.referenceImages || [])].filter(Boolean);
-  const prompt = [
+
+  if (input.surroundingImage && !referenceImages.includes(input.surroundingImage)) {
+    referenceImages.push(input.surroundingImage);
+  }
+  if (input.dressImage && !referenceImages.includes(input.dressImage)) {
+    referenceImages.push(input.dressImage);
+  }
+
+  const cameraStyleKey = input.cameraStyle || "iphone_candid";
+  const cameraConfig = CAMERA_STYLES[cameraStyleKey] || CAMERA_STYLES.iphone_candid;
+
+  const promptSections = [
     identity.anchorPrompt,
-    identity.faceCut ? `Identity face cut: ${identity.faceCut}` : "",
-    input.prompt
-  ].filter(Boolean).join("\n\n");
-  const negativePrompt = [input.negativePrompt, identity.negativeIdentityPrompt].filter(Boolean).join(", ");
+    identity.faceCut ? `Identity face cut: ${identity.faceCut}` : ""
+  ];
+
+  if (cameraConfig.directive) {
+    promptSections.push(cameraConfig.directive);
+  }
+
+  if (input.surroundingImage) {
+    promptSections.push(`Surrounding Atmosphere & Environment Reference: Match the background atmosphere, spatial depth, lighting, and environmental setting depicted in the provided surrounding reference image${input.surroundingPrompt ? ` (${input.surroundingPrompt})` : ""}.`);
+  }
+
+  if (input.dressImage) {
+    promptSections.push(`Wardrobe & Attire Reference: The subject must be styled wearing the exact outfit, clothing cut, fabric texture, and color scheme depicted in the provided dress reference image${input.dressPrompt ? ` (${input.dressPrompt})` : ""}.`);
+  }
+
+  promptSections.push(input.prompt);
+
+  const prompt = promptSections.filter(Boolean).join("\n\n");
+  const negativePrompt = [input.negativePrompt, cameraConfig.negative, identity.negativeIdentityPrompt].filter(Boolean).join(", ");
   return {
     ...input,
     prompt,
     negativePrompt,
+    cameraStyle: cameraStyleKey,
     referenceImages,
+    surroundingImage: input.surroundingImage || null,
+    surroundingPrompt: input.surroundingPrompt || "",
+    dressImage: input.dressImage || null,
+    dressPrompt: input.dressPrompt || "",
     identityPack: {
       faceCut: identity.faceCut || "",
       anchorPrompt: identity.anchorPrompt || "",
+      angles: identity.angles || {},
       referenceImages: identity.referenceImages || [],
       identityLockStrength: identity.identityLockStrength ?? null,
       notes: identity.notes || ""
