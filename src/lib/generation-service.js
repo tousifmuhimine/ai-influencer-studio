@@ -68,6 +68,11 @@ async function processJob(jobId, ownerEmail) {
     if (model.provider === "openai" && model.type === "image") output = await runOpenAiImage(job, credential, model);
     else if (model.provider === "stability" && model.type === "image") output = await runStabilityImage(job, credential);
     else if (model.provider === "huggingface" && model.type === "image") output = await runHuggingFaceImage(job, credential, model);
+    else if (model.provider === "google" && model.type === "image") output = await runGoogleImage(job, credential, model);
+    else if (model.provider === "fal" && model.type === "image") output = await runFalImage(job, credential, model);
+    else if (model.provider === "replicate" && model.type === "image") output = await runReplicateImage(job, credential, model);
+    else if (model.provider === "nvidia" && model.type === "image") output = await runNvidiaImage(job, credential, model);
+    else if (model.provider === "runway" && model.type === "image") output = await runRunwayImage(job, credential, model);
     else throw new Error("No adapter route exists for this model.");
 
     output = await persistOutputImages(output);
@@ -195,6 +200,231 @@ function dimensionsFor(aspectRatio) {
   };
   const [width, height] = dimensions[aspectRatio] || [1024, 1024];
   return { width, height };
+}
+
+async function runGoogleImage(job, credential, model) {
+  const generateOnce = async () => {
+    const parts = [{ text: job.input.prompt }];
+    const ref = model.referenceImage ? job.input.referenceImages?.[0] : null;
+    if (ref) {
+      try {
+        parts.push(await referenceAsInlineData(ref));
+      } catch {
+        // Fall back to text-only generation when a reference cannot be converted.
+      }
+    }
+    if (job.input.negativePrompt) parts[0].text += `\n\nAvoid: ${job.input.negativePrompt}`;
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model.modelId)}:generateContent?key=${encodeURIComponent(credential)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts }],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error?.message || data.message || `Google request failed with ${response.status}`);
+    const outputParts = data?.candidates?.[0]?.content?.parts || [];
+    const images = outputParts
+      .filter((part) => part.inlineData?.data)
+      .map((part) => ({ b64_json: part.inlineData.data, content_type: part.inlineData.mimeType || "image/png" }));
+    if (!images.length) throw new Error("Google did not return an image.");
+    return images;
+  };
+
+  const count = Math.min(Math.max(Number(job.input.count || 1), 1), 4);
+  const batches = await Promise.all(Array.from({ length: count }, () => generateOnce()));
+  return { data: batches.flat() };
+}
+
+async function runFalImage(job, credential, model) {
+  const count = Math.max(Number(job.input.count || 1), 1);
+  const body = { prompt: job.input.prompt };
+  if (job.input.negativePrompt) body.negative_prompt = job.input.negativePrompt;
+  if (job.input.seed) body.seed = Number(job.input.seed);
+  if (count > 1) body.num_images = count;
+
+  const ref = model.referenceImage ? job.input.referenceImages?.[0] : null;
+  if (ref && (ref.startsWith("http") || ref.startsWith("data:"))) body.image_url = ref;
+
+  const response = await fetch(`https://fal.run/${model.modelId}`, {
+    method: "POST",
+    headers: { authorization: `Key ${credential}`, "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.error || data.message || `Fal request failed with ${response.status}`);
+  const images = data.images || data.data || (Array.isArray(data) ? data : []);
+  const normalized = images.map((item) => {
+    if (typeof item === "string") return { url: item };
+    if (item?.url) return { url: item.url, content_type: item.content_type };
+    if (item?.b64_json) return { b64_json: item.b64_json, content_type: item.content_type };
+    return item;
+  });
+  if (!normalized.length) throw new Error("Fal did not return an image.");
+  return { data: normalized };
+}
+
+async function runReplicateImage(job, credential, model) {
+  const count = Math.max(Number(job.input.count || 1), 1);
+  const input = { prompt: job.input.prompt };
+  if (job.input.negativePrompt) input.negative_prompt = job.input.negativePrompt;
+  if (job.input.seed) input.seed = Number(job.input.seed);
+  if (count > 1) input.num_outputs = count;
+
+  const ref = model.referenceImage ? job.input.referenceImages?.[0] : null;
+  if (ref && (ref.startsWith("http") || ref.startsWith("data:"))) input.image = ref;
+
+  const createResponse = await fetch(`https://api.replicate.com/v1/models/${model.modelId}/predictions`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${credential}`,
+      "content-type": "application/json",
+      prefer: "wait=60"
+    },
+    body: JSON.stringify({ input })
+  });
+  let prediction = await createResponse.json().catch(() => ({}));
+  if (!createResponse.ok) throw new Error(prediction.detail || prediction.error || prediction.message || `Replicate request failed with ${createResponse.status}`);
+
+  const startedAt = Date.now();
+  while (prediction.status && !["succeeded", "failed", "canceled", "aborted"].includes(prediction.status) && Date.now() - startedAt < 90000) {
+    await sleep(2000);
+    const pollResponse = await fetch(prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`, {
+      headers: { authorization: `Bearer ${credential}` }
+    });
+    prediction = await pollResponse.json().catch(() => ({}));
+    if (!pollResponse.ok) throw new Error(prediction.detail || prediction.error || prediction.message || `Replicate poll failed with ${pollResponse.status}`);
+  }
+
+  if (prediction.status !== "succeeded") throw new Error(prediction.error || prediction.detail || `Replicate status ${prediction.status}`);
+  const output = prediction.output;
+  const items = Array.isArray(output) ? output : (typeof output === "string" ? [output] : (output?.images || []));
+  const normalized = items.map((item) => {
+    if (typeof item === "string") return { url: item };
+    if (item?.url) return { url: item.url, content_type: item.content_type };
+    if (item?.b64_json) return { b64_json: item.b64_json, content_type: item.content_type };
+    return item;
+  });
+  if (!normalized.length) throw new Error("Replicate did not return an image.");
+  return { data: normalized };
+}
+
+async function runNvidiaImage(job, credential, model) {
+  const { width, height } = dimensionsFor(job.input.aspectRatio);
+  const body = {
+    prompt: job.input.prompt,
+    negative_prompt: job.input.negativePrompt,
+    width,
+    height,
+    steps: 30,
+    cfg_scale: 4.5
+  };
+  if (job.input.seed) body.seed = Number(job.input.seed);
+
+  const ref = model.referenceImage ? job.input.referenceImages?.[0] : null;
+  if (ref) {
+    try {
+      const blob = await referenceAsBlob(ref);
+      body.mode = "image-to-image";
+      body.image = Buffer.from(await blob.arrayBuffer()).toString("base64");
+    } catch {
+      body.mode = "text-to-image";
+    }
+  } else {
+    body.mode = "text-to-image";
+  }
+
+  const response = await fetch(`https://ai.api.nvidia.com/v1/genai/${model.modelId}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${credential}`, "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.error || data.message || `NVIDIA request failed with ${response.status}`);
+  const artifacts = data.artifacts || data.images || data.data || [];
+  const normalized = artifacts.map((item) => {
+    if (item?.base64) return { b64_json: item.base64, content_type: "image/png" };
+    if (item?.b64_json) return { b64_json: item.b64_json, content_type: item.content_type };
+    if (item?.url) return { url: item.url, content_type: item.content_type };
+    return item;
+  });
+  if (!normalized.length) throw new Error("NVIDIA did not return an image.");
+  return { data: normalized };
+}
+
+async function runRunwayImage(job, credential, model) {
+  const ratioMap = {
+    "16:9": "1920:1080",
+    "9:16": "1080:1920",
+    "4:3": "1440:1080",
+    "3:4": "1080:1440",
+    "1:1": "1024:1024",
+    "3:2": "1536:1024",
+    "2:3": "1024:1536"
+  };
+  const body = {
+    model: "gen4_image",
+    promptText: (job.input.prompt || "").slice(0, 1000),
+    ratio: ratioMap[job.input.aspectRatio] || "1024:1024"
+  };
+  if (job.input.seed) body.seed = Number(job.input.seed);
+
+  const ref = model.referenceImage ? job.input.referenceImages?.[0] : null;
+  if (ref && (ref.startsWith("http") || ref.startsWith("data:"))) body.referenceImages = [{ uri: ref }];
+
+  const createResponse = await fetch("https://api.dev.runwayml.com/v1/text_to_image", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${credential}`,
+      "content-type": "application/json",
+      "x-runway-version": "2024-11-06"
+    },
+    body: JSON.stringify(body)
+  });
+  let task = await createResponse.json().catch(() => ({}));
+  if (!createResponse.ok) throw new Error(task.error || task.message || `Runway request failed with ${createResponse.status}`);
+
+  const taskId = task.id;
+  const startedAt = Date.now();
+  while (task.status && !["SUCCEEDED", "FAILED", "CANCELLED", "CANCELED"].includes(task.status) && Date.now() - startedAt < 120000) {
+    await sleep(2000);
+    const pollResponse = await fetch(`https://api.dev.runwayml.com/v1/tasks/${taskId}`, {
+      headers: {
+        authorization: `Bearer ${credential}`,
+        "x-runway-version": "2024-11-06"
+      }
+    });
+    task = await pollResponse.json().catch(() => ({}));
+    if (!pollResponse.ok) throw new Error(task.error || task.message || `Runway poll failed with ${pollResponse.status}`);
+  }
+
+  if (task.status !== "SUCCEEDED") throw new Error(task.error || task.failure || `Runway status ${task.status}`);
+  const output = task.output || task.outputs || task.artifacts || [];
+  const items = Array.isArray(output) ? output : (typeof output === "string" ? [output] : []);
+  const normalized = items.map((item) => {
+    if (typeof item === "string") return { url: item };
+    if (item?.url) return { url: item.url, content_type: item.content_type };
+    if (item?.uri) return { url: item.uri, content_type: item.content_type };
+    return item;
+  });
+  if (!normalized.length) throw new Error("Runway did not return an image.");
+  return { data: normalized };
+}
+
+async function referenceAsInlineData(reference) {
+  const blob = await referenceAsBlob(reference);
+  return {
+    inlineData: {
+      mimeType: blob.type || "image/png",
+      data: Buffer.from(await blob.arrayBuffer()).toString("base64")
+    }
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function mirrorGeneration(generation) {
